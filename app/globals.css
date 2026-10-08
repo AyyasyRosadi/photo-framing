@@ -3,4 +3,24 @@
 @source '../node_modules/@heroui/theme/dist/**/*.{js,ts,jsx,tsx}';
 @custom-variant dark (&:is(.dark *));
 
-body { background: #f4f4f5; color: #18181b; }
+/* Self-hosted Inter: the same files are loaded by the export worker, so preview and export match. */
+@font-face {
+  font-family: "PF Inter";
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/inter-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "PF Inter";
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/inter-latin-700-normal.woff2") format("woff2");
+}
+
+body {
+  background: #f4f4f5;
+  color: #18181b;
+  font-family: "PF Inter", system-ui, sans-serif;
+}

@@ -1,12 +1,9 @@
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
 import type { ReactNode } from "react";
 import PwaRegister from "@/components/PwaRegister";
 import Providers from "./providers";
 // @ts-ignore
 import "./globals.css";
-
-const inter = Inter({ subsets: ["latin"], weight: ["400", "700"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
   title: "Photo Frame",
@@ -19,8 +16,8 @@ export const viewport: Viewport = { width: "device-width", initialScale: 1, view
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={`light ${inter.variable}`}>
-      <body className="min-h-screen antialiased" style={{ fontFamily: "var(--font-inter), system-ui, sans-serif" }}>
+    <html lang="en" className="light">
+      <body className="min-h-screen antialiased">
         <Providers>{children}</Providers>
         <PwaRegister />
       </body>

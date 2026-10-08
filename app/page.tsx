@@ -2,7 +2,7 @@
 import { useState } from "react";
 import JSZip from "jszip";
 import { Button, Progress } from "@heroui/react";
-import { ClipboardCopy, Copy, Download, FolderDown, Layers, Loader2, Plus, SlidersHorizontal, X } from "lucide-react";
+import { ClipboardCopy, Copy, Download, FolderDown, Layers, Loader2, Plus, RotateCcw, SlidersHorizontal, X } from "lucide-react";
 import BottomSheet from "@/components/BottomSheet";
 import ExportOptions from "@/components/ExportOptions";
 import FramePicker from "@/components/FramePicker";
@@ -12,22 +12,16 @@ import PhotoCard from "@/components/PhotoCard";
 import PresetBar from "@/components/PresetBar";
 import UploadDropzone from "@/components/UploadDropzone";
 import { useLocalState } from "@/lib/useLocalState";
+import { runJob } from "@/lib/renderpool";
+import { openZipTarget, writeZip, type ZipTarget } from "@/lib/zip";
 import {
-  ASPECTS, DEFAULT_META, EMPTY_META, FORMATS, downloadBlob, normalizeImage, readExif, renderCardBlob, uid,
-  type AspectId, type ExportSettings, type FrameId, type PhotoMeta, type Preset,
+  ASPECTS, CENTER, DEFAULT_META, EMPTY_META, FORMATS, downloadBlob, normalizeImage, readExif, uid,
+  type AspectId, type ExportSettings, type Focus, type FrameId, type PhotoMeta, type Preset, type RenderOptions,
 } from "@/lib/photo";
 
-type Item = { id: string; name: string; url: string; w: number; h: number; meta: PhotoMeta; frame: FrameId; aspect: AspectId };
+type Item = { id: string; name: string; file: File; url: string; w: number; h: number; meta: PhotoMeta; frame: FrameId; aspect: AspectId; focus: Focus };
 
 const ASPECT_OPTIONS = (Object.keys(ASPECTS) as AspectId[]).map((value) => ({ value, label: ASPECTS[value].label }));
-
-const loadDims = (url: string) =>
-  new Promise<{ w: number; h: number }>((res, rej) => {
-    const im = new Image();
-    im.onload = () => res({ w: im.naturalWidth, h: im.naturalHeight });
-    im.onerror = () => rej(new Error("unreadable"));
-    im.src = url;
-  });
 
 const baseName = (n: string) => n.replace(/\.[^.]+$/, "");
 
@@ -47,7 +41,9 @@ export default function Page() {
   const active = items.find((i) => i.id === activeId) ?? items[0];
   const addError = (m: string) => setErrors((e) => [...e, m]);
   const ext = FORMATS[exportSettings.format].ext;
-  const optsOf = (it: Item) => ({ frame: it.frame, aspect: it.aspect, ...exportSettings });
+  const optsOf = (it: Item) => ({ frame: it.frame, aspect: it.aspect, focus: it.focus, ...exportSettings });
+  // Renders on the worker pool, from the original file.
+  const render = async (it: Item, o: Partial<RenderOptions>) => (await runJob({ kind: "render", source: it.file, meta: it.meta, options: o })).blob;
 
   const handleFiles = async (files: File[]) => {
     setLoading(true);
@@ -55,15 +51,11 @@ export default function Page() {
       files.map(async (orig): Promise<Item> => {
         const exif = await readExif(orig); // read before HEIC conversion (conversion drops EXIF)
         const file = await normalizeImage(orig);
-        const url = URL.createObjectURL(file);
-        try {
-          const { w, h } = await loadDims(url);
-          const meta = Object.keys(exif).length ? { ...EMPTY_META, ...exif } : { ...DEFAULT_META };
-          return { id: uid(), name: file.name, url, w, h, meta, frame: defaultFrame, aspect: "original" };
-        } catch (e) {
-          URL.revokeObjectURL(url);
-          throw e;
-        }
+        // The UI only keeps a small preview in memory; the original File is used at export time.
+        const { blob, w, h } = await runJob({ kind: "preview", source: file });
+        const url = URL.createObjectURL(blob);
+        const meta = Object.keys(exif).length ? { ...EMPTY_META, ...exif } : { ...DEFAULT_META };
+        return { id: uid(), name: file.name, file, url, w: w ?? 0, h: h ?? 0, meta, frame: defaultFrame, aspect: "original", focus: CENTER };
       }),
     );
     const ok: Item[] = [];
@@ -111,7 +103,7 @@ export default function Page() {
     if (!active) return;
     setBusy("one");
     try {
-      downloadBlob(await renderCardBlob(active.url, active.meta, optsOf(active)), `${baseName(active.name)}-framed.${ext}`);
+      downloadBlob(await render(active, optsOf(active)), `${baseName(active.name)}-framed.${ext}`);
     } catch {
       addError("Export failed. Please try again.");
     } finally {
@@ -122,7 +114,7 @@ export default function Page() {
   const copyOne = async () => {
     if (!active) return;
     try {
-      const blob = await renderCardBlob(active.url, active.meta, { ...optsOf(active), format: "png" });
+      const blob = await render(active, { ...optsOf(active), format: "png" });
       await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
@@ -132,17 +124,28 @@ export default function Page() {
   };
 
   const downloadAll = async () => {
+    // Ask where to save first (needs the click's user activation). null = normal download fallback.
+    let target: ZipTarget | null = null;
+    try {
+      target = await openZipTarget("photo-frames.zip");
+    } catch (e) {
+      if ((e as Error).name === "AbortError") return;
+    }
     setBusy("all");
     setProgress(0);
     try {
       const zip = new JSZip();
-      for (const [i, it] of items.entries()) {
-        zip.file(`${i + 1}-${baseName(it.name)}-framed.${ext}`, await renderCardBlob(it.url, it.meta, optsOf(it)));
-        setProgress(Math.round(((i + 1) / items.length) * 100));
-        await new Promise((r) => setTimeout(r)); // let the UI repaint between photos
-      }
-      downloadBlob(await zip.generateAsync({ type: "blob" }), "photo-frames.zip");
+      let done = 0;
+      // Up to 3 photos render in parallel on the worker pool.
+      await Promise.all(
+        items.map(async (it, i) => {
+          zip.file(`${i + 1}-${baseName(it.name)}-framed.${ext}`, await render(it, optsOf(it)));
+          setProgress(Math.round((++done / items.length) * 100));
+        }),
+      );
+      await writeZip(zip, "photo-frames.zip", target);
     } catch {
+      target?.close().catch(() => { });
       addError("Batch export failed. Try fewer photos at once.");
     } finally {
       setBusy("");
@@ -205,7 +208,14 @@ export default function Page() {
                     Frame & crop to all
                   </Button>
                 </FramePicker>
-                <OptionButtons options={ASPECT_OPTIONS} value={active.aspect} onChange={(aspect) => patch((i) => ({ ...i, aspect }))} />
+                <OptionButtons options={ASPECT_OPTIONS} value={active.aspect} onChange={(aspect) => patch((i) => ({ ...i, aspect }))}>
+                  {active.aspect !== "original" && (
+                    <Button size="sm" variant="light" onPress={() => patch((i) => ({ ...i, focus: CENTER }))} startContent={<RotateCcw size={14} />}>
+                      Center
+                    </Button>
+                  )}
+                </OptionButtons>
+                {active.aspect !== "original" && <p className="text-xs text-zinc-500">Drag the photo (or use the arrow keys) to choose what stays in the frame.</p>}
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
@@ -225,7 +235,7 @@ export default function Page() {
                 </UploadDropzone>
               </div>
 
-              <PhotoCard src={active.url} meta={active.meta} frame={active.frame} aspect={active.aspect} />
+              <PhotoCard src={active.url} meta={active.meta} frame={active.frame} aspect={active.aspect} focus={active.focus} onFocusChange={(focus) => patch((i) => ({ ...i, focus }))} />
 
               <ExportOptions value={exportSettings} onChange={setExportSettings} />
 

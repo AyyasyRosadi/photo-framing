@@ -1,5 +1,3 @@
-import exifr from "exifr";
-
 export type PhotoMeta = {
   shotBy: string;
   brand: string;
@@ -24,7 +22,7 @@ export const EMPTY_META: PhotoMeta = {
 };
 export const DEFAULT_META: PhotoMeta = {
   ...EMPTY_META,
-  shotBy: "iPhone 14 Pro",
+  shotBy: "iPhone 14 pro",
   brand: "Apple",
   focalLength: "100",
   aperture: "2.8",
@@ -32,16 +30,14 @@ export const DEFAULT_META: PhotoMeta = {
   iso: "50",
 };
 
-/* ---------- Font (Inter via next/font, exposed as --font-inter) ---------- */
-const FALLBACK = `-apple-system, "Helvetica Neue", Arial, sans-serif`;
-export const FONT_CSS = `var(--font-inter), ${FALLBACK}`;
-
-function getFontStack() {
-  const v = getComputedStyle(document.documentElement)
-    .getPropertyValue("--font-inter")
-    .trim();
-  return v ? `${v}, ${FALLBACK}` : FALLBACK;
-}
+/* ---------- Font (self-hosted Inter: loaded by CSS in the page and by FontFace inside the worker) ---------- */
+export const FONT_FAMILY = "PF Inter";
+export const FONT_FILES = [
+  { weight: 400, url: "/fonts/inter-latin-400-normal.woff2" },
+  { weight: 700, url: "/fonts/inter-latin-700-normal.woff2" },
+];
+export const FONT_STACK = `"${FONT_FAMILY}", -apple-system, "Helvetica Neue", Arial, sans-serif`;
+export const FONT_CSS = FONT_STACK;
 
 /* ---------- Helpers ---------- */
 export const uid = () =>
@@ -129,6 +125,10 @@ export const ASPECTS: Record<AspectId, { label: string; ratio?: number }> = {
   "9:16": { label: "9:16", ratio: 9 / 16 },
 };
 
+/** Crop position inside the photo, 0–1 per axis. 0.5 / 0.5 = centered. */
+export type Focus = { x: number; y: number };
+export const CENTER: Focus = { x: 0.5, y: 0.5 };
+
 export type ExportFormat = "png" | "jpg" | "webp";
 export type ExportSettings = { format: ExportFormat; quality: number };
 export const FORMATS: Record<ExportFormat, { mime: string; ext: string }> = {
@@ -139,6 +139,7 @@ export const FORMATS: Record<ExportFormat, { mime: string; ext: string }> = {
 export type RenderOptions = {
   frame: FrameId;
   aspect: AspectId;
+  focus: Focus;
 } & ExportSettings;
 
 /* ---------- Caption ---------- */
@@ -203,6 +204,7 @@ export function getCaption(
 /* ---------- EXIF auto-fill ---------- */
 export async function readExif(file: File): Promise<Partial<PhotoMeta>> {
   try {
+    const exifr = (await import("exifr")).default;
     const e = await exifr.parse(file, [
       "Make",
       "Model",
@@ -241,89 +243,4 @@ export function downloadBlob(blob: Blob, filename: string) {
   a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-}
-
-export async function renderCardBlob(
-  src: string,
-  meta: PhotoMeta,
-  o: Partial<RenderOptions> = {},
-): Promise<Blob> {
-  const {
-    frame: frameId = "white",
-    aspect = "original",
-    format = "png",
-    quality = 0.92,
-  } = o;
-  const f = FRAMES[frameId];
-  const stack = getFontStack();
-  await Promise.all([
-    document.fonts.load(`400 20px ${stack}`),
-    document.fonts.load(`700 20px ${stack}`),
-  ]).catch(() => {});
-
-  // createImageBitmap applies EXIF rotation explicitly, so portrait photos are never exported sideways.
-  const img = await createImageBitmap(await (await fetch(src)).blob(), {
-    imageOrientation: "from-image",
-  });
-
-  // Center-crop the source to the chosen aspect ratio.
-  const ratio = ASPECTS[aspect].ratio ?? img.width / img.height;
-  const sw = Math.min(img.width, img.height * ratio);
-  const sh = sw / ratio;
-
-  const W = Math.round(Math.min(3200, Math.max(1200, sw / (1 - f.pad * 2))));
-  const pad = W * f.pad;
-  const pw = W - pad * 2;
-  const ph = pw / ratio;
-  const cap = W * f.cap;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = W;
-  canvas.height = Math.round(pad + ph + cap);
-  const ctx = canvas.getContext("2d")!;
-  ctx.fillStyle = f.bg;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(
-    img,
-    (img.width - sw) / 2,
-    (img.height - sh) / 2,
-    sw,
-    sh,
-    pad,
-    pad,
-    pw,
-    ph,
-  );
-  img.close();
-
-  ctx.textBaseline = "middle";
-  for (const line of getCaption(meta, frameId)) {
-    const size = W * line.size;
-    const gap = W * line.gap;
-    const font = (it: CaptionItem) => `${it.weight} ${size}px ${stack}`;
-    const widths = line.items.map((it) => {
-      ctx.font = font(it);
-      return ctx.measureText(it.text).width;
-    });
-    let x =
-      (W -
-        (widths.reduce((a, b) => a + b, 0) + gap * (line.items.length - 1))) /
-      2;
-    const y = pad + ph + cap * line.y;
-    line.items.forEach((it, i) => {
-      ctx.font = font(it);
-      ctx.fillStyle = it.color;
-      ctx.fillText(it.text, x, y);
-      x += widths[i] + gap;
-    });
-  }
-
-  return new Promise((resolve, reject) =>
-    canvas.toBlob(
-      (b) => (b ? resolve(b) : reject(new Error("Export failed"))),
-      FORMATS[format].mime,
-      quality,
-    ),
-  );
 }
