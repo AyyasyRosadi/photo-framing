@@ -1,6 +1,6 @@
 "use client";
 import type { ReactNode } from "react";
-import { FONT, FRAMES, LINE, getCaption, type CaptionItem, type FrameId, type PhotoMeta } from "@/lib/photo";
+import { FONT_CSS, FRAMES, getCaption, type FrameId, type PhotoMeta } from "@/lib/photo";
 
 type PhotoCardProps = {
   src: string;
@@ -12,32 +12,27 @@ type PhotoCardProps = {
   children?: ReactNode;
 };
 
-function Row({ items, size, gap, top }: { items: CaptionItem[]; size: number; gap: number; top: number }) {
-  return (
-    <div
-      className="absolute inset-x-0 flex -translate-y-1/2 items-center justify-center whitespace-nowrap leading-none"
-      style={{ top: `${top * 100}%`, fontSize: `${size * 100}cqw`, gap: `${gap * 100}cqw` }}
-    >
-      {items.map((it, i) => (
-        <span key={i} style={{ fontWeight: it.weight, color: it.color }}>
-          {it.text}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 export default function PhotoCard({ src, meta, frame = "white", alt = "Uploaded photo", className = "", children }: PhotoCardProps) {
   const f = FRAMES[frame];
-  const { headline, specs } = getCaption(meta, frame);
   return (
-    <div className={`relative w-full [container-type:inline-size] ${className}`} style={{ fontFamily: FONT }}>
+    <div className={`relative w-full @container ${className}`} style={{ fontFamily: FONT_CSS }}>
       <figure className="m-0 shadow-xl" style={{ background: f.bg, padding: `${f.pad * 100}cqw`, paddingBottom: 0 }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={src} alt={alt} className="block h-auto w-full" />
         <figcaption className="relative" style={{ height: `${f.cap * 100}cqw` }}>
-          <Row items={headline} size={LINE.size1 * f.scale} gap={LINE.gap1 * f.scale} top={LINE.y1} />
-          <Row items={specs} size={LINE.size2 * f.scale} gap={LINE.gap2 * f.scale} top={LINE.y2} />
+          {getCaption(meta, frame).map((line, n) => (
+            <div
+              key={n}
+              className="absolute inset-x-0 flex -translate-y-1/2 items-center justify-center whitespace-nowrap leading-none"
+              style={{ top: `${line.y * 100}%`, fontSize: `${line.size * 100}cqw`, gap: `${line.gap * 100}cqw` }}
+            >
+              {line.items.map((it, i) => (
+                <span key={i} style={{ fontWeight: it.weight, color: it.color }}>
+                  {it.text}
+                </span>
+              ))}
+            </div>
+          ))}
         </figcaption>
       </figure>
       {children}

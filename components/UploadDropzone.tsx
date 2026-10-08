@@ -1,6 +1,7 @@
 "use client";
 import { useState, type ReactNode } from "react";
 import { ImageUp } from "lucide-react";
+import { isImage } from "@/lib/photo";
 
 type UploadDropzoneProps = {
   onFiles: (files: File[]) => void;
@@ -15,14 +16,14 @@ type UploadDropzoneProps = {
 export default function UploadDropzone({
   onFiles,
   multiple = true,
-  accept = "image/*",
+  accept = "image/*,.heic,.heif",
   disabled = false,
   className = "",
   children,
 }: UploadDropzoneProps) {
   const [over, setOver] = useState(false);
   const take = (list?: FileList | null) => {
-    const files = Array.from(list ?? []).filter((f) => f.type.startsWith("image/"));
+    const files = Array.from(list ?? []).filter((f) => isImage(f));
     if (files.length) onFiles(multiple ? files : files.slice(0, 1));
   };
 
