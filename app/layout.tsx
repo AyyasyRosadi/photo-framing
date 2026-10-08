@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import type { ReactNode } from "react";
-import PwaRegister from "@/components/Pwaregister";
+import PwaRegister from "@/components/PwaRegister";
 import Providers from "./providers";
 // @ts-ignore
 import "./globals.css";
