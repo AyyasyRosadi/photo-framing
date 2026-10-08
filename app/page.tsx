@@ -1,19 +1,25 @@
 "use client";
 import { useState } from "react";
 import JSZip from "jszip";
-import { Button, Input, Progress } from "@heroui/react";
-import { Copy, Download, FolderDown, Loader2, Plus, X } from "lucide-react";
+import { Button, Progress } from "@heroui/react";
+import { ClipboardCopy, Copy, Download, FolderDown, Layers, Loader2, Plus, SlidersHorizontal, X } from "lucide-react";
+import BottomSheet from "@/components/Bottomsheet";
+import ExportOptions from "@/components/ExportOptions";
 import FramePicker from "@/components/FramePicker";
+import MetaForm from "@/components/Metaform";
+import OptionButtons from "@/components/OptionButtons";
 import PhotoCard from "@/components/PhotoCard";
 import PresetBar from "@/components/PresetBar";
 import UploadDropzone from "@/components/UploadDropzone";
 import { useLocalState } from "@/lib/useLocalState";
 import {
-  DEFAULT_META, EMPTY_META, downloadBlob, normalizeImage, readExif, renderCardBlob, uid,
-  type FrameId, type PhotoMeta, type Preset,
+  ASPECTS, DEFAULT_META, EMPTY_META, FORMATS, downloadBlob, normalizeImage, readExif, renderCardBlob, uid,
+  type AspectId, type ExportSettings, type FrameId, type PhotoMeta, type Preset,
 } from "@/lib/photo";
 
-type Item = { id: string; name: string; url: string; w: number; h: number; meta: PhotoMeta };
+type Item = { id: string; name: string; url: string; w: number; h: number; meta: PhotoMeta; frame: FrameId; aspect: AspectId };
+
+const ASPECT_OPTIONS = (Object.keys(ASPECTS) as AspectId[]).map((value) => ({ value, label: ASPECTS[value].label }));
 
 const loadDims = (url: string) =>
   new Promise<{ w: number; h: number }>((res, rej) => {
@@ -28,15 +34,20 @@ const baseName = (n: string) => n.replace(/\.[^.]+$/, "");
 export default function Page() {
   const [items, setItems] = useState<Item[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [frame, setFrame] = useLocalState<FrameId>("pf:frame", "white");
+  const [defaultFrame, setDefaultFrame] = useLocalState<FrameId>("pf:frame", "white");
+  const [exportSettings, setExportSettings] = useLocalState<ExportSettings>("pf:export", { format: "png", quality: 0.92 });
   const [presets, setPresets] = useLocalState<Preset[]>("pf:presets", []);
   const [busy, setBusy] = useState<"" | "one" | "all">("");
   const [progress, setProgress] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
+  const [sheet, setSheet] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const active = items.find((i) => i.id === activeId) ?? items[0];
   const addError = (m: string) => setErrors((e) => [...e, m]);
+  const ext = FORMATS[exportSettings.format].ext;
+  const optsOf = (it: Item) => ({ frame: it.frame, aspect: it.aspect, ...exportSettings });
 
   const handleFiles = async (files: File[]) => {
     setLoading(true);
@@ -48,7 +59,7 @@ export default function Page() {
         try {
           const { w, h } = await loadDims(url);
           const meta = Object.keys(exif).length ? { ...EMPTY_META, ...exif } : { ...DEFAULT_META };
-          return { id: uid(), name: file.name, url, w, h, meta };
+          return { id: uid(), name: file.name, url, w, h, meta, frame: defaultFrame, aspect: "original" };
         } catch (e) {
           URL.revokeObjectURL(url);
           throw e;
@@ -62,15 +73,23 @@ export default function Page() {
     setLoading(false);
   };
 
-  const patchActive = (fn: (m: PhotoMeta) => PhotoMeta) => {
+  const patch = (fn: (i: Item) => Item) => {
     if (!active) return;
-    setItems((p) => p.map((i) => (i.id === active.id ? { ...i, meta: fn(i.meta) } : i)));
+    setItems((p) => p.map((i) => (i.id === active.id ? fn(i) : i)));
   };
-  const setField = (k: keyof PhotoMeta) => (v: string) => patchActive((m) => ({ ...m, [k]: v }));
+  const setField = (k: keyof PhotoMeta) => (v: string) => patch((i) => ({ ...i, meta: { ...i.meta, [k]: v } }));
+  const setFrame = (frame: FrameId) => {
+    patch((i) => ({ ...i, frame }));
+    setDefaultFrame(frame);
+  };
 
-  const applyToAll = () => {
+  const applyDetailsToAll = () => {
     if (!active) return;
     setItems((p) => p.map((i) => ({ ...i, meta: { ...active.meta, resolution: i.meta.resolution } })));
+  };
+  const applyLookToAll = () => {
+    if (!active) return;
+    setItems((p) => p.map((i) => ({ ...i, frame: active.frame, aspect: active.aspect })));
   };
 
   const savePreset = () => {
@@ -92,11 +111,23 @@ export default function Page() {
     if (!active) return;
     setBusy("one");
     try {
-      downloadBlob(await renderCardBlob(active.url, active.meta, frame), `${baseName(active.name)}-framed.png`);
+      downloadBlob(await renderCardBlob(active.url, active.meta, optsOf(active)), `${baseName(active.name)}-framed.${ext}`);
     } catch {
       addError("Export failed. Please try again.");
     } finally {
       setBusy("");
+    }
+  };
+
+  const copyOne = async () => {
+    if (!active) return;
+    try {
+      const blob = await renderCardBlob(active.url, active.meta, { ...optsOf(active), format: "png" });
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      addError("Copying images isn't supported in this browser. Use Download instead.");
     }
   };
 
@@ -106,7 +137,7 @@ export default function Page() {
     try {
       const zip = new JSZip();
       for (const [i, it] of items.entries()) {
-        zip.file(`${i + 1}-${baseName(it.name)}-framed.png`, await renderCardBlob(it.url, it.meta, frame));
+        zip.file(`${i + 1}-${baseName(it.name)}-framed.${ext}`, await renderCardBlob(it.url, it.meta, optsOf(it)));
         setProgress(Math.round(((i + 1) / items.length) * 100));
         await new Promise((r) => setTimeout(r)); // let the UI repaint between photos
       }
@@ -119,13 +150,36 @@ export default function Page() {
     }
   };
 
-  const meta = active?.meta ?? DEFAULT_META;
-  const detected = active ? `${active.w}×${active.h}` : "e.g. 4032×3024";
+  const detected = active ? `${active.w}×${active.h}` : undefined;
+
+  // One form element, rendered in the sidebar on desktop and in the bottom sheet on mobile.
+  const form = (
+    <MetaForm
+      meta={active?.meta ?? DEFAULT_META}
+      onField={setField}
+      detected={detected}
+      hasPhoto={!!active}
+      footer={
+        <Button size="sm" variant="flat" isDisabled={items.length < 2} onPress={applyDetailsToAll} startContent={<Copy size={14} />}>
+          Apply these details to all
+        </Button>
+      }
+    >
+      <PresetBar
+        presets={presets}
+        disabled={!active}
+        onApply={(m) => patch((i) => ({ ...i, meta: { ...m, resolution: i.meta.resolution } }))}
+        onSave={savePreset}
+        onDelete={(id) => setPresets((p) => p.filter((x) => x.id !== id))}
+      />
+      <hr className="border-zinc-100" />
+    </MetaForm>
+  );
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-10">
-      <h1 className="text-3xl font-semibold tracking-tight">Photo Frame</h1>
-      <p className="mt-1 text-zinc-500">Upload photos, pick a frame, and export printed-style cards.</p>
+    <main className="mx-auto max-w-6xl px-4 py-6 sm:py-10">
+      <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Photo Frame</h1>
+      <p className="mt-1 text-sm text-zinc-500 sm:text-base">Upload photos, pick a frame, and export printed-style cards.</p>
 
       {errors.length > 0 && (
         <div className="mt-4 flex items-start justify-between gap-3 rounded-xl bg-red-50 p-3 text-sm text-red-700">
@@ -134,25 +188,8 @@ export default function Page() {
         </div>
       )}
 
-      <div className="mt-8 grid gap-8 lg:grid-cols-[340px_1fr]">
-        <section className="flex flex-col gap-3 self-start rounded-2xl bg-white p-5 shadow-sm">
-          <PresetBar presets={presets} disabled={!active} onApply={(m) => patchActive((cur) => ({ ...m, resolution: cur.resolution }))} onSave={savePreset} onDelete={(id) => setPresets((p) => p.filter((x) => x.id !== id))} />
-          <hr className="border-zinc-100" />
-          <h2 className="font-medium">Caption details</h2>
-          <Input variant="bordered" size="sm" label="Shot by" value={meta.shotBy} onValueChange={setField("shotBy")} />
-          <Input variant="bordered" size="sm" label="Brand" value={meta.brand} onValueChange={setField("brand")} />
-          <div className="grid grid-cols-2 gap-3">
-            <Input variant="bordered" size="sm" label="Focal length" endContent="mm" value={meta.focalLength} onValueChange={setField("focalLength")} />
-            <Input variant="bordered" size="sm" label="Aperture" startContent="f/" value={meta.aperture} onValueChange={setField("aperture")} />
-            <Input variant="bordered" size="sm" label="Shutter" placeholder="1/607" value={meta.shutter} onValueChange={setField("shutter")} />
-            <Input variant="bordered" size="sm" label="ISO" value={meta.iso} onValueChange={setField("iso")} />
-          </div>
-          <Input variant="bordered" size="sm" label="Resolution" placeholder={detected} description={active ? `Detected: ${detected}. Leave empty to hide.` : "Leave empty to hide."} value={meta.resolution} onValueChange={setField("resolution")} />
-          <Input variant="bordered" size="sm" label="Custom text" placeholder="e.g. Bandung, Oct 2026" description="Shown as an extra line under the details." value={meta.extra} onValueChange={setField("extra")} />
-          <Button size="sm" variant="flat" isDisabled={items.length < 2} onPress={applyToAll} startContent={<Copy size={14} />}>
-            Apply these details to all
-          </Button>
-        </section>
+      <div className="mt-6 grid gap-8 lg:mt-8 lg:grid-cols-[340px_1fr]">
+        <aside className="hidden self-start rounded-2xl bg-white p-5 shadow-sm lg:block">{form}</aside>
 
         <section>
           {loading && (
@@ -162,7 +199,14 @@ export default function Page() {
           )}
           {active ? (
             <div className="mx-auto flex max-w-xl flex-col gap-5">
-              <FramePicker value={frame} onChange={setFrame} />
+              <div className="flex flex-col gap-2">
+                <FramePicker value={active.frame} onChange={setFrame}>
+                  <Button size="sm" variant="light" onPress={applyLookToAll} isDisabled={items.length < 2} startContent={<Layers size={14} />}>
+                    Frame & crop to all
+                  </Button>
+                </FramePicker>
+                <OptionButtons options={ASPECT_OPTIONS} value={active.aspect} onChange={(aspect) => patch((i) => ({ ...i, aspect }))} />
+              </div>
 
               <div className="flex flex-wrap items-center gap-2">
                 {items.map((it) => (
@@ -181,24 +225,36 @@ export default function Page() {
                 </UploadDropzone>
               </div>
 
-              <PhotoCard src={active.url} meta={active.meta} frame={frame} />
+              <PhotoCard src={active.url} meta={active.meta} frame={active.frame} aspect={active.aspect} />
+
+              <ExportOptions value={exportSettings} onChange={setExportSettings} />
 
               {progress !== null && <Progress aria-label="Exporting photos" size="sm" value={progress} showValueLabel />}
 
-              <div className="flex flex-wrap justify-center gap-3">
+              <div className="sticky bottom-0 -mx-4 flex flex-wrap justify-center gap-2 bg-zinc-100/90 px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur sm:static sm:mx-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none">
+                <Button className="lg:hidden" variant="flat" onPress={() => setSheet(true)} startContent={<SlidersHorizontal size={16} />}>
+                  Details
+                </Button>
                 <Button color="primary" isDisabled={busy !== ""} isLoading={busy === "one"} onPress={downloadOne} startContent={busy !== "one" && <Download size={16} />}>
-                  Download PNG
+                  Download
+                </Button>
+                <Button variant="bordered" isDisabled={busy !== ""} onPress={copyOne} startContent={<ClipboardCopy size={16} />}>
+                  {copied ? "Copied!" : "Copy"}
                 </Button>
                 <Button variant="bordered" isDisabled={items.length < 2 || busy !== ""} isLoading={busy === "all"} onPress={downloadAll} startContent={busy !== "all" && <FolderDown size={16} />}>
-                  Download all ({items.length}) as ZIP
+                  ZIP ({items.length})
                 </Button>
               </div>
             </div>
           ) : (
-            !loading && <UploadDropzone onFiles={handleFiles} className="min-h-105 rounded-2xl border-2 border-dashed border-zinc-300 bg-white" />
+            !loading && <UploadDropzone onFiles={handleFiles} className="min-h-80 rounded-2xl border-2 border-dashed border-zinc-300 bg-white sm:min-h-105" />
           )}
         </section>
       </div>
+
+      <BottomSheet open={sheet} onClose={() => setSheet(false)} title="Edit details" className="lg:hidden">
+        {form}
+      </BottomSheet>
     </main>
   );
 }

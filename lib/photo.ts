@@ -24,7 +24,7 @@ export const EMPTY_META: PhotoMeta = {
 };
 export const DEFAULT_META: PhotoMeta = {
   ...EMPTY_META,
-  shotBy: "iPhone 18 Pro",
+  shotBy: "iPhone 14 Pro",
   brand: "Apple",
   focalLength: "100",
   aperture: "2.8",
@@ -118,6 +118,28 @@ export const FRAMES: Record<FrameId, Frame> = {
     tone: LIGHT,
   },
 };
+
+/* ---------- Crop (aspect) + export settings ---------- */
+export type AspectId = "original" | "1:1" | "4:5" | "3:2" | "9:16";
+export const ASPECTS: Record<AspectId, { label: string; ratio?: number }> = {
+  original: { label: "Original" },
+  "1:1": { label: "1:1", ratio: 1 },
+  "4:5": { label: "4:5", ratio: 4 / 5 },
+  "3:2": { label: "3:2", ratio: 3 / 2 },
+  "9:16": { label: "9:16", ratio: 9 / 16 },
+};
+
+export type ExportFormat = "png" | "jpg" | "webp";
+export type ExportSettings = { format: ExportFormat; quality: number };
+export const FORMATS: Record<ExportFormat, { mime: string; ext: string }> = {
+  png: { mime: "image/png", ext: "png" },
+  jpg: { mime: "image/jpeg", ext: "jpg" },
+  webp: { mime: "image/webp", ext: "webp" },
+};
+export type RenderOptions = {
+  frame: FrameId;
+  aspect: AspectId;
+} & ExportSettings;
 
 /* ---------- Caption ---------- */
 export type CaptionItem = { text: string; weight: number; color: string };
@@ -224,8 +246,14 @@ export function downloadBlob(blob: Blob, filename: string) {
 export async function renderCardBlob(
   src: string,
   meta: PhotoMeta,
-  frameId: FrameId = "white",
+  o: Partial<RenderOptions> = {},
 ): Promise<Blob> {
+  const {
+    frame: frameId = "white",
+    aspect = "original",
+    format = "png",
+    quality = 0.92,
+  } = o;
   const f = FRAMES[frameId];
   const stack = getFontStack();
   await Promise.all([
@@ -238,12 +266,15 @@ export async function renderCardBlob(
     imageOrientation: "from-image",
   });
 
-  const W = Math.round(
-    Math.min(3200, Math.max(1200, img.width / (1 - f.pad * 2))),
-  );
+  // Center-crop the source to the chosen aspect ratio.
+  const ratio = ASPECTS[aspect].ratio ?? img.width / img.height;
+  const sw = Math.min(img.width, img.height * ratio);
+  const sh = sw / ratio;
+
+  const W = Math.round(Math.min(3200, Math.max(1200, sw / (1 - f.pad * 2))));
   const pad = W * f.pad;
   const pw = W - pad * 2;
-  const ph = (pw * img.height) / img.width;
+  const ph = pw / ratio;
   const cap = W * f.cap;
 
   const canvas = document.createElement("canvas");
@@ -253,7 +284,17 @@ export async function renderCardBlob(
   ctx.fillStyle = f.bg;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(img, pad, pad, pw, ph);
+  ctx.drawImage(
+    img,
+    (img.width - sw) / 2,
+    (img.height - sh) / 2,
+    sw,
+    sh,
+    pad,
+    pad,
+    pw,
+    ph,
+  );
   img.close();
 
   ctx.textBaseline = "middle";
@@ -281,7 +322,8 @@ export async function renderCardBlob(
   return new Promise((resolve, reject) =>
     canvas.toBlob(
       (b) => (b ? resolve(b) : reject(new Error("Export failed"))),
-      "image/png",
+      FORMATS[format].mime,
+      quality,
     ),
   );
 }

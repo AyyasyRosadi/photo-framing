@@ -1,24 +1,25 @@
 "use client";
 import type { ReactNode } from "react";
-import { FONT_CSS, FRAMES, getCaption, type FrameId, type PhotoMeta } from "@/lib/photo";
+import { ASPECTS, FONT_CSS, FRAMES, getCaption, type AspectId, type FrameId, type PhotoMeta } from "@/lib/photo";
 
 type PhotoCardProps = {
   src: string;
   meta: PhotoMeta;
   frame?: FrameId;
+  aspect?: AspectId;
   alt?: string;
   className?: string;
   /** Optional extra content rendered on top of the card (stamp, watermark, etc.). */
   children?: ReactNode;
 };
 
-export default function PhotoCard({ src, meta, frame = "white", alt = "Uploaded photo", className = "", children }: PhotoCardProps) {
+export default function PhotoCard({ src, meta, frame = "white", aspect = "original", alt = "Uploaded photo", className = "", children }: PhotoCardProps) {
   const f = FRAMES[frame];
   return (
     <div className={`relative w-full @container ${className}`} style={{ fontFamily: FONT_CSS }}>
       <figure className="m-0 shadow-xl" style={{ background: f.bg, padding: `${f.pad * 100}cqw`, paddingBottom: 0 }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt={alt} className="block h-auto w-full" />
+        <img src={src} alt={alt} className="block h-auto w-full object-cover" style={{ aspectRatio: ASPECTS[aspect].ratio }} />
         <figcaption className="relative" style={{ height: `${f.cap * 100}cqw` }}>
           {getCaption(meta, frame).map((line, n) => (
             <div
